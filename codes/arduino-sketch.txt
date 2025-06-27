@@ -1,0 +1,168 @@
+#include <SPI.h>
+#include <MFRC522.h>
+#include <SoftwareSerial.h>
+#include <Adafruit_Fingerprint.h>
+
+
+#define RFID_SS_PIN 10
+#define RFID_RST_PIN 9
+#define FINGERPRINT_RX_PIN 2
+#define FINGERPRINT_TX_PIN 3
+
+
+MFRC522 rfid(RFID_SS_PIN, RFID_RST_PIN);
+SoftwareSerial mySerial(FINGERPRINT_RX_PIN, FINGERPRINT_TX_PIN);
+Adafruit_Fingerprint finger(&mySerial);
+
+
+String rfidUID = "";
+String pin = "";
+int validFingerprintIDs[4];
+int idCount = 0;
+
+
+void setup() {
+  Serial.begin(9600);
+  SPI.begin();
+  rfid.PCD_Init();
+
+
+  mySerial.begin(57600);
+  finger.begin(57600);
+
+
+  Serial.println("System Ready. Scan RFID...");
+}
+
+
+void loop() {
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    rfidUID = getRFIDUID();
+    Serial.print("RFID:");
+    Serial.println(rfidUID);
+
+
+    pin = getPINFromSerial();
+    Serial.print("PIN:");
+    Serial.println(pin);
+
+
+    Serial.println("REQ:" + rfidUID + "," + pin);
+
+
+    if (waitForPythonResponse()) {
+      Serial.println("Place Finger...");
+      int scannedID = getFingerprintID();
+
+
+      if (isFingerprintValid(scannedID)) {
+        Serial.println("Access Granted!");
+      } else {
+        Serial.println("Fingerprint Not Authorized!");
+      }
+    } else {
+      Serial.println("Access Denied (RFID or PIN invalid)");
+    }
+
+
+    rfid.PICC_HaltA();
+    delay(2000);
+    Serial.println("Scan RFID...");
+  }
+}
+
+
+String getRFIDUID() {
+  String uid = "";
+  for (byte i = 0; i < rfid.uid.size; i++) {
+    if (rfid.uid.uidByte[i] < 0x10) uid += " 0";
+    else uid += " ";
+    uid += String(rfid.uid.uidByte[i], HEX);
+  }
+  uid.trim();
+  uid.toUpperCase();
+  return uid;
+}
+
+
+String getPINFromSerial() {
+  String input = "";
+  Serial.println("Enter 4-digit PIN:");
+  while (input.length() < 4) {
+    if (Serial.available()) {
+      char ch = Serial.read();
+      if (isDigit(ch)) {
+        input += ch;
+        Serial.print('*');
+      }
+    }
+  }
+  Serial.println();
+  return input;
+}
+
+
+int getFingerprintID() {
+  if (finger.getImage() != FINGERPRINT_OK) return -1;
+  if (finger.image2Tz() != FINGERPRINT_OK) return -1;
+  if (finger.fingerFastSearch() != FINGERPRINT_OK) return -1;
+  return finger.fingerID;
+}
+
+
+bool waitForPythonResponse() {
+  String input = "";
+  idCount = 0;
+
+
+  unsigned long timeout = millis() + 5000;
+  while (millis() < timeout) {
+    if (Serial.available()) {
+      input = Serial.readStringUntil('\n');
+      input.trim();
+      if (input.startsWith("FPID:")) {
+        input = input.substring(5);
+        parseFingerprintList(input);
+        return idCount > 0;
+      }
+    }
+  }
+
+
+  return false;
+}
+
+
+void parseFingerprintList(String data) {
+  int index = 0;
+  while (data.length() > 0 && index < 10) {
+    int commaIndex = data.indexOf(',');
+    if (commaIndex == -1) {
+      validFingerprintIDs[index++] = data.toInt();
+      break;
+    } else {
+      validFingerprintIDs[index++] = data.substring(0, commaIndex).toInt();
+      data = data.substring(commaIndex + 1);
+    }
+  }
+  idCount = index;
+}
+
+
+bool isFingerprintValid(int scannedID) {
+  for (int i = 0; i < idCount; i++) {
+    if (validFingerprintIDs[i] == scannedID) return true;
+  }
+  return false;
+}
+
+
+
+
+
+
+
+
+
+
+
